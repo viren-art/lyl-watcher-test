@@ -1,191 +1,265 @@
-const WeatherService = require('../../modules/weather/weather.service');
-const GridService = require('../../modules/grid/grid.service');
-const BessService = require('../../modules/bess/bess.service');
-const AnalyticsService = require('../../modules/analytics/analytics.service');
-const { GraphQLError } = require('graphql');
+const PredictionService = require('../../modules/ai-forecasting/prediction-service');
+const GridImpactService = require('../../modules/grid-impact/impact-service');
+const { getLatestWeatherData, getWeatherHistory } = require('../../database/timeseries/weather-repository');
+const { getPredictions } = require('../../database/timeseries/prediction-repository');
+const { getGridRegions, getSubstationsByRegion } = require('../../database/grid-data/infrastructure-repository');
+const { getGridImpacts, getImpactsBySeverity } = require('../../database/grid-data/impact-repository');
+const logger = require('../../utils/logger');
 
-const weatherService = new WeatherService();
-const gridService = new GridService();
-const bessService = new BessService();
-const analyticsService = new AnalyticsService();
+const predictionService = new PredictionService();
+const gridImpactService = new GridImpactService();
 
 const resolvers = {
   Query: {
     // Weather queries
-    weatherPrediction: async (_, { predictionId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    weatherPrediction: async (_, { gridRegionId, forecastHours = 24 }, context) => {
+      try {
+        // Verify user has access to region
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const forecast = await predictionService.generateForecast(gridRegionId, forecastHours);
+        return forecast;
+      } catch (error) {
+        logger.error('GraphQL weatherPrediction error', { error: error.message, gridRegionId });
+        throw error;
       }
-      return await weatherService.getPredictionById(predictionId);
     },
 
-    weatherPredictions: async (_, { regionId, startTime, endTime, limit, cursor }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    weatherHistory: async (_, { gridRegionId, hours = 24 }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const history = await getWeatherHistory(gridRegionId, hours);
+        return history;
+      } catch (error) {
+        logger.error('GraphQL weatherHistory error', { error: error.message, gridRegionId });
+        throw error;
       }
-      return await weatherService.getPredictions({
-        regionId,
-        startTime,
-        endTime,
-        limit: limit || 100,
-        cursor
-      });
     },
 
-    latestWeatherPrediction: async (_, { regionId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    currentWeather: async (_, { gridRegionId }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const current = await getLatestWeatherData(gridRegionId);
+        return current;
+      } catch (error) {
+        logger.error('GraphQL currentWeather error', { error: error.message, gridRegionId });
+        throw error;
       }
-      return await weatherService.getLatestPrediction(regionId);
     },
 
     // Grid queries
-    gridImpact: async (_, { impactId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    gridImpact: async (_, { gridRegionId, weatherPredictionId, forecastHours = 24 }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const impact = await gridImpactService.analyzeGridImpact(
+          gridRegionId,
+          weatherPredictionId,
+          forecastHours
+        );
+        return impact;
+      } catch (error) {
+        logger.error('GraphQL gridImpact error', { error: error.message, gridRegionId });
+        throw error;
       }
-      return await gridService.getImpactById(impactId);
     },
 
-    gridImpacts: async (_, { regionId, severity, startTime, endTime, limit, cursor }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    gridImpacts: async (_, { gridRegionId, severity, limit = 10 }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        let impacts;
+        if (severity) {
+          impacts = await getImpactsBySeverity(severity, limit);
+          impacts = impacts.filter(i => i.gridRegionId === gridRegionId);
+        } else {
+          impacts = await gridImpactService.getRecentImpacts(gridRegionId, limit);
+        }
+        return impacts;
+      } catch (error) {
+        logger.error('GraphQL gridImpacts error', { error: error.message, gridRegionId });
+        throw error;
       }
-      return await gridService.getImpacts({
-        regionId,
-        severity,
-        startTime,
-        endTime,
-        limit: limit || 100,
-        cursor
-      });
     },
 
-    latestGridImpact: async (_, { regionId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    gridRegions: async (_, __, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const regions = await getGridRegions();
+        
+        // Filter by user's accessible regions
+        if (context.user.regions && context.user.regions.length > 0) {
+          return regions.filter(r => context.user.regions.includes(r.gridRegionId));
+        }
+        
+        return regions;
+      } catch (error) {
+        logger.error('GraphQL gridRegions error', { error: error.message });
+        throw error;
       }
-      return await gridService.getLatestImpact(regionId);
     },
 
-    gridRegions: async (_, { subscriptionOnly }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    substations: async (_, { gridRegionId }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const substations = await getSubstationsByRegion(gridRegionId);
+        return substations;
+      } catch (error) {
+        logger.error('GraphQL substations error', { error: error.message, gridRegionId });
+        throw error;
       }
-      const regions = await gridService.getRegions(context.user.customerId, subscriptionOnly);
-      return regions;
     },
 
-    substations: async (_, { regionId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+    // Multi-region queries
+    multiRegionWeather: async (_, { regionIds }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
+
+        const summaries = await Promise.all(
+          regionIds.map(async (regionId) => {
+            const [currentWeather, forecast, gridImpact, regions] = await Promise.all([
+              getLatestWeatherData(regionId),
+              predictionService.generateForecast(regionId, 24),
+              gridImpactService.analyzeGridImpact(regionId, null, 24),
+              getGridRegions()
+            ]);
+
+            const region = regions.find(r => r.gridRegionId === regionId);
+
+            // Generate alerts based on grid impact
+            const alerts = [];
+            if (gridImpact.severity === 'CRITICAL' || gridImpact.severity === 'HIGH') {
+              alerts.push({
+                id: `alert-${regionId}-${Date.now()}`,
+                severity: gridImpact.severity,
+                title: `${gridImpact.severity} Grid Impact Alert`,
+                message: `Predicted outage probability: ${gridImpact.outageProbability}%`,
+                timestamp: new Date().toISOString(),
+                recommendations: gridImpact.recommendations
+              });
+            }
+
+            return {
+              gridRegionId: regionId,
+              regionName: region?.regionName || `Region ${regionId}`,
+              currentWeather,
+              forecast24h: forecast.predictions,
+              gridImpact,
+              alerts
+            };
+          })
+        );
+
+        return summaries;
+      } catch (error) {
+        logger.error('GraphQL multiRegionWeather error', { error: error.message, regionIds });
+        throw error;
       }
-      return await gridService.getSubstations(regionId);
     },
 
-    // BESS queries
-    bessRecommendations: async (_, { regionId, status, minOptimizationScore, limit, cursor }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await bessService.getRecommendations({
-        regionId,
-        status,
-        minOptimizationScore,
-        limit: limit || 100,
-        cursor
-      });
-    },
+    multiRegionComparison: async (_, { regionIds }, context) => {
+      try {
+        if (!context.user) {
+          throw new Error('Authentication required');
+        }
 
-    bessRoiAnalysis: async (_, { locationId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await bessService.analyzeRoi({ locationId, analysisYears: 20 });
-    },
+        const regions = await getGridRegions();
+        const selectedRegions = regions.filter(r => regionIds.includes(r.gridRegionId));
 
-    // Analytics queries
-    predictionAccuracy: async (_, { modelType, startDate, endDate, regionId }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await analyticsService.getPredictionAccuracy({
-        modelType,
-        startDate,
-        endDate,
-        regionId
-      });
-    },
+        // Fetch current data for all regions
+        const regionData = await Promise.all(
+          regionIds.map(async (regionId) => {
+            const [weather, impact] = await Promise.all([
+              getLatestWeatherData(regionId),
+              gridImpactService.analyzeGridImpact(regionId, null, 24)
+            ]);
+            return { regionId, weather, impact };
+          })
+        );
 
-    customerUsage: async (_, { customerId, startDate, endDate }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      // Only admins can query other customers
-      const targetCustomerId = customerId || context.user.customerId;
-      if (customerId && context.user.role !== 'ADMIN') {
-        throw new GraphQLError('Forbidden', { extensions: { code: 'FORBIDDEN' } });
-      }
-      return await analyticsService.getCustomerUsage({
-        customerId: targetCustomerId,
-        startDate,
-        endDate
-      });
-    }
-  },
+        // Build comparison metrics
+        const metrics = [
+          {
+            name: 'Temperature',
+            unit: '°C',
+            values: regionData.map(d => ({
+              gridRegionId: d.regionId,
+              value: d.weather?.temperature || 0,
+              delta: null,
+              trend: 'stable'
+            }))
+          },
+          {
+            name: 'Wind Speed',
+            unit: 'm/s',
+            values: regionData.map(d => ({
+              gridRegionId: d.regionId,
+              value: d.weather?.windSpeed || 0,
+              delta: null,
+              trend: 'stable'
+            }))
+          },
+          {
+            name: 'Precipitation',
+            unit: 'mm',
+            values: regionData.map(d => ({
+              gridRegionId: d.regionId,
+              value: d.weather?.precipitation || 0,
+              delta: null,
+              trend: 'stable'
+            }))
+          },
+          {
+            name: 'Grid Stress Index',
+            unit: '%',
+            values: regionData.map(d => ({
+              gridRegionId: d.regionId,
+              value: d.impact?.stressIndex || 0,
+              delta: null,
+              trend: 'stable'
+            }))
+          },
+          {
+            name: 'Outage Probability',
+            unit: '%',
+            values: regionData.map(d => ({
+              gridRegionId: d.regionId,
+              value: d.impact?.outageProbability || 0,
+              delta: null,
+              trend: 'stable'
+            }))
+          }
+        ];
 
-  Mutation: {
-    // Weather mutations
-    createWeatherPrediction: async (_, { input }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
+        return {
+          regions: selectedRegions,
+          metrics,
+          timestamp: new Date().toISOString()
+        };
+      } catch (error) {
+        logger.error('GraphQL multiRegionComparison error', { error: error.message, regionIds });
+        throw error;
       }
-      return await weatherService.generatePrediction({
-        ...input,
-        userId: context.user.userId,
-        customerId: context.user.customerId
-      });
-    },
-
-    // Grid mutations
-    createGridImpactAnalysis: async (_, { input }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await gridService.generateImpactAnalysis({
-        ...input,
-        userId: context.user.userId,
-        customerId: context.user.customerId
-      });
-    },
-
-    subscribeGridAlerts: async (_, { input }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await gridService.subscribeAlerts({
-        ...input,
-        customerId: context.user.customerId
-      });
-    },
-
-    // BESS mutations
-    optimizeBessLocation: async (_, { input }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await bessService.optimizeLocation({
-        ...input,
-        userId: context.user.userId,
-        customerId: context.user.customerId
-      });
-    },
-
-    analyzeBessRoi: async (_, { input }, context) => {
-      if (!context.user) {
-        throw new GraphQLError('Unauthorized', { extensions: { code: 'UNAUTHORIZED' } });
-      }
-      return await bessService.analyzeRoi(input);
     }
   }
 };
