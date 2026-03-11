@@ -1,0 +1,167 @@
+# AWS SageMaker Training Configuration
+training_jobs:
+  weather_lstm:
+    instance_type: ml.p3.2xlarge  # GPU instance for TensorFlow
+    instance_count: 1
+    volume_size_gb: 50
+    max_runtime_seconds: 7200  # 2 hours
+    
+    hyperparameters:
+      epochs: 100
+      batch_size: 32
+      learning_rate: 0.001
+      sequence_length: 24
+      forecast_horizon: 24
+      lstm_units: "128,64,32"
+      dropout: 0.2
+      early_stopping_patience: 10
+    
+    input_data:
+      training:
+        s3_uri: s3://weather-impact-ml/training-data/weather/
+        content_type: application/json
+      validation:
+        s3_uri: s3://weather-impact-ml/validation-data/weather/
+        content_type: application/json
+    
+    output_data:
+      s3_uri: s3://weather-impact-ml/models/weather_lstm/
+    
+    metrics:
+      - name: train:loss
+        regex: "train_loss: ([0-9\\.]+)"
+      - name: validation:loss
+        regex: "val_loss: ([0-9\\.]+)"
+      - name: validation:mae
+        regex: "val_mae: ([0-9\\.]+)"
+      - name: validation:accuracy
+        regex: "val_accuracy: ([0-9\\.]+)"
+
+  grid_transformer:
+    instance_type: ml.p3.2xlarge  # GPU instance for PyTorch
+    instance_count: 1
+    volume_size_gb: 50
+    max_runtime_seconds: 7200  # 2 hours
+    
+    hyperparameters:
+      epochs: 100
+      batch_size: 32
+      learning_rate: 0.001
+      sequence_length: 48
+      forecast_horizon: 24
+      d_model: 128
+      nhead: 8
+      num_layers: 4
+      dropout: 0.1
+      early_stopping_patience: 10
+    
+    input_data:
+      training:
+        s3_uri: s3://weather-impact-ml/training-data/grid/
+        content_type: application/json
+      validation:
+        s3_uri: s3://weather-impact-ml/validation-data/grid/
+        content_type: application/json
+    
+    output_data:
+      s3_uri: s3://weather-impact-ml/models/grid_transformer/
+    
+    metrics:
+      - name: train:loss
+        regex: "train_loss: ([0-9\\.]+)"
+      - name: validation:loss
+        regex: "val_loss: ([0-9\\.]+)"
+      - name: validation:mae
+        regex: "val_mae: ([0-9\\.]+)"
+      - name: validation:accuracy
+        regex: "val_accuracy: ([0-9\\.]+)"
+
+# Model Registry Configuration
+model_registry:
+  bucket: weather-impact-ml
+  prefix: models/
+  
+  approval_workflow:
+    enabled: true
+    min_accuracy_threshold:
+      weather_lstm: 0.85
+      grid_transformer: 0.80
+    min_improvement_threshold: 0.02  # 2% improvement required
+    
+  versioning:
+    strategy: semantic  # semantic or timestamp
+    auto_increment: true
+
+# MLflow Configuration
+mlflow:
+  tracking_uri: http://mlflow.weather-impact.internal:5000
+  experiment_prefix: weather-impact
+  artifact_location: s3://weather-impact-ml/mlflow-artifacts/
+  
+  autolog:
+    tensorflow: true
+    pytorch: true
+    sklearn: true
+
+# Monitoring & Alerting
+monitoring:
+  cloudwatch:
+    namespace: WeatherImpact/MLTraining
+    metrics:
+      - training_duration
+      - model_accuracy
+      - validation_loss
+      - training_cost
+    
+  alarms:
+    - name: LowModelAccuracy
+      metric: model_accuracy
+      threshold: 0.85
+      comparison: LessThanThreshold
+      evaluation_periods: 1
+      actions:
+        - arn:aws:sns:us-east-1:123456789:ml-team-alerts
+    
+    - name: TrainingFailure
+      metric: training_failures
+      threshold: 1
+      comparison: GreaterThanOrEqualToThreshold
+      evaluation_periods: 1
+      actions:
+        - arn:aws:sns:us-east-1:123456789:ml-team-alerts
+
+# Cost Optimization
+cost_optimization:
+  spot_instances:
+    enabled: true
+yaml
+    max_wait_time_seconds: 3600
+    max_spot_price: 1.50  # USD per hour
+  
+  auto_shutdown:
+    enabled: true
+    idle_timeout_minutes: 30
+  
+  scheduled_training:
+    use_reserved_capacity: true
+    preferred_hours: "02:00-06:00 UTC"  # Off-peak hours
+
+# Data Pipeline
+data_pipeline:
+  preprocessing:
+    normalization: minmax
+    feature_engineering:
+      - rolling_averages
+      - time_features
+      - weather_derivatives
+    
+  validation:
+    train_split: 0.8
+    validation_split: 0.2
+    shuffle: true
+    random_seed: 42
+  
+  caching:
+    enabled: true
+    cache_location: s3://weather-impact-ml/cache/
+    ttl_hours: 168  # 1 week
