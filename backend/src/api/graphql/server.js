@@ -2,13 +2,14 @@ const { ApolloServer } = require('apollo-server-express');
 const jwt = require('jsonwebtoken');
 const typeDefs = require('./schema');
 const resolvers = require('./resolvers');
+const logger = require('../../utils/logger');
 
 const createApolloServer = () => {
-  return new ApolloServer({
+  const server = new ApolloServer({
     typeDefs,
     resolvers,
     context: ({ req }) => {
-      // Extract JWT token from Authorization header
+      // Extract user from JWT token
       const authHeader = req.headers.authorization || '';
       const token = authHeader.replace('Bearer ', '');
 
@@ -18,25 +19,39 @@ const createApolloServer = () => {
 
       try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        return { user: decoded };
+        return {
+          user: {
+            userId: decoded.userId,
+            customerId: decoded.customerId,
+            role: decoded.role,
+            regions: decoded.regions || []
+          }
+        };
       } catch (error) {
+        logger.warn('Invalid JWT token in GraphQL request', { error: error.message });
         return { user: null };
       }
     },
     formatError: (error) => {
-      // Log error for monitoring
-      console.error('GraphQL Error:', error);
-
-      // Return sanitized error to client
-      return {
+      logger.error('GraphQL error', {
         message: error.message,
-        code: error.extensions?.code || 'INTERNAL_ERROR',
-        timestamp: new Date().toISOString()
-      };
+        path: error.path,
+        extensions: error.extensions
+      });
+
+      // Don't expose internal errors to clients
+      if (error.message.includes('Database') || error.message.includes('Internal')) {
+        return new Error('An internal error occurred');
+      }
+
+      return error;
     },
     introspection: process.env.NODE_ENV !== 'production',
-    playground: process.env.NODE_ENV !== 'production'
+    playground: process.env.NODE_ENV !== 'production',
+    debug: process.env.NODE_ENV !== 'production'
   });
+
+  return server;
 };
 
 module.exports = createApolloServer;
