@@ -1,0 +1,14 @@
+apiVersion: v2
+name: weather-impact
+description: AI Weather Impact & BESS Location Optimization System
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - weather
+  - grid
+  - ai
+  - prediction
+maintainers:
+  - name: Platform Team
+    email: platform@weather-impact.com

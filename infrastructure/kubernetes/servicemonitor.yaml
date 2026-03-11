@@ -1,0 +1,31 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: weather-prediction-metrics
+  namespace: weather-impact-prod
+  labels:
+    app: weather-prediction
+spec:
+  selector:
+    matchLabels:
+      app: weather-prediction
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: grid-impact-metrics
+  namespace: weather-impact-prod
+  labels:
+    app: grid-impact
+spec:
+  selector:
+    matchLabels:
+      app: grid-impact
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics

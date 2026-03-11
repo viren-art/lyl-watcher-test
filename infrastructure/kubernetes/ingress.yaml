@@ -1,0 +1,101 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: weather-impact-ingress
+  namespace: weather-impact-prod
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "route"
+    nginx.ingress.kubernetes.io/session-cookie-hash: "sha1"
+spec:
+  tls:
+  - hosts:
+    - api.weather-impact.com
+    - api-ne.weather-impact.com
+    - api-mw.weather-impact.com
+    - api-we.weather-impact.com
+    - api-so.weather-impact.com
+    - api-pa.weather-impact.com
+    secretName: weather-impact-tls
+  rules:
+  - host: api.weather-impact.com
+    http:
+      paths:
+      - path: /api/v1/weather
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80
+      - path: /api/v1/grid
+        pathType: Prefix
+        backend:
+          service:
+            name: grid-impact-service
+            port:
+              number: 80
+      - path: /graphql
+        pathType: Prefix
+        backend:
+          service:
+            name: graphql-gateway
+            port:
+              number: 80
+  - host: api-ne.weather-impact.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80
+  - host: api-mw.weather-impact.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80
+  - host: api-we.weather-impact.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80
+  - host: api-so.weather-impact.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80
+  - host: api-pa.weather-impact.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: weather-prediction-service
+            port:
+              number: 80

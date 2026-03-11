@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: region-config
+  namespace: weather-impact-prod
+data:
+  regions.json: |
+    {
+      "regions": [
+        {
+          "id": 1,
+          "name": "Northeast",
+          "code": "NE",
+          "datacenter": "us-east-1",
+          "timezone": "America/New_York",
+          "coordinates": {"lat": 42.3601, "lon": -71.0589},
+          "weatherStations": ["KBOS", "KJFK", "KEWR"],
+          "gridProvider": "ISO-NE"
+        },
+        {
+          "id": 2,
+          "name": "Midwest",
+          "code": "MW",
+          "datacenter": "us-central-1",
+          "timezone": "America/Chicago",
+          "coordinates": {"lat": 41.8781, "lon": -87.6298},
+          "weatherStations": ["KORD", "KMDW", "KMKE"],
+          "gridProvider": "MISO"
+        },
+        {
+          "id": 3,
+          "name": "Western",
+          "code": "WE",
+          "datacenter": "us-west-1",
+          "timezone": "America/Los_Angeles",
+          "coordinates": {"lat": 34.0522, "lon": -118.2437},
+          "weatherStations": ["KLAX", "KSFO", "KSAN"],
+          "gridProvider": "CAISO"
+        },
+        {
+          "id": 4,
+          "name": "Southern",
+          "code": "SO",
+          "datacenter": "us-south-1",
+          "timezone": "America/Chicago",
+          "coordinates": {"lat": 29.7604, "lon": -95.3698},
+          "weatherStations": ["KIAH", "KDFW", "KAUS"],
+          "gridProvider": "ERCOT"
+        },
+        {
+          "id": 5,
+          "name": "Pacific",
+          "code": "PA",
+          "datacenter": "us-west-2",
+          "timezone": "America/Los_Angeles",
+          "coordinates": {"lat": 47.6062, "lon": -122.3321},
+          "weatherStations": ["KSEA", "KPDX", "KBOI"],
+          "gridProvider": "BPA"
+        }
+      ]
+    }
+  
+  scaling-thresholds.yaml: |
+    autoscaling:
+      cpu_threshold: 70
+      memory_threshold: 80
+      scale_up_cooldown: 180
+      scale_down_cooldown: 300
+      min_replicas: 3
+      max_replicas: 50
+      target_requests_per_second: 100
+    
+    regions:
+      phase1:
+        - NE
+        - MW
+        - WE
+        - SO
+        - PA
+      phase2_expansion:
+        - SE  # Southeast
+        - NW  # Northwest
+        - SW  # Southwest
+        - GL  # Great Lakes
+        - MA  # Mid-Atlantic
+      phase3_expansion:
+        - RM  # Rocky Mountains
+        - GP  # Great Plains
+        - NP  # Northern Plains
+        - SP  # Southern Plains
+        - AK  # Alaska
+        - HI  # Hawaii

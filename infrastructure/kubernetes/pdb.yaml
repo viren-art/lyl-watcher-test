@@ -1,0 +1,32 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: weather-prediction-pdb
+  namespace: weather-impact-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: weather-prediction
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grid-impact-pdb
+  namespace: weather-impact-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: grid-impact
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: weather-ingestion-pdb
+  namespace: weather-impact-prod
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: weather-ingestion
