@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.13.0-pg16
+    environment:
+      POSTGRES_DB: weather_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    command: postgres -c shared_preload_libraries=timescaledb
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      TIMESCALEDB_HOST: timescaledb
+      TIMESCALEDB_PORT: 5432
+      TIMESCALEDB_DATABASE: weather_db
+      TIMESCALEDB_USER: postgres
+      TIMESCALEDB_PASSWORD: ${TIMESCALEDB_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+      WEATHER_ENCRYPTION_KEY: ${WEATHER_ENCRYPTION_KEY}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - timescaledb
+      - kafka
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+volumes:
+  timescale_data:
