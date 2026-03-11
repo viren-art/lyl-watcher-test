@@ -2,31 +2,48 @@ const { Kafka } = require('kafkajs');
 const crypto = require('crypto');
 
 const kafka = new Kafka({
-  clientId: 'weather-impact-system',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+  clientId: 'weather-ingestion-service',
+  brokers: process.env.KAFKA_BROKERS?.split(',') || ['localhost:9092'],
   ssl: process.env.KAFKA_SSL === 'true',
+  sasl: process.env.KAFKA_SASL_ENABLED === 'true' ? {
+    mechanism: 'plain',
+    username: process.env.KAFKA_USERNAME,
+    password: process.env.KAFKA_PASSWORD,
+  } : undefined,
+  retry: {
+    initialRetryTime: 100,
+    retries: 8,
+    maxRetryTime: 30000,
+    multiplier: 2,
+  },
 });
 
 const producer = kafka.producer({
-  allowAutoTopicCreation: true,
+  allowAutoTopicCreation: false,
   transactionTimeout: 30000,
+  maxInFlightRequests: 5,
+  idempotent: true,
+  compression: 1, // GZIP compression
 });
 
 const consumer = kafka.consumer({
-  groupId: 'weather-ingestion-group',
+  groupId: 'weather-processing-group',
   sessionTimeout: 30000,
   heartbeatInterval: 3000,
+  maxBytesPerPartition: 1048576, // 1MB
+  retry: {
+    retries: 5,
+  },
 });
 
 const admin = kafka.admin();
 
 // Topic configurations
 const TOPICS = {
-  WEATHER_RAW: 'weather.raw',
-  WEATHER_VALIDATED: 'weather.validated',
-  WEATHER_PREDICTIONS: 'weather.predictions',
-  GRID_TELEMETRY: 'grid.telemetry',
-  GRID_ALERTS: 'grid.alerts'
+  RAW_WEATHER: 'weather.raw',
+  VALIDATED_WEATHER: 'weather.validated',
+  ANOMALIES: 'weather.anomalies',
+  PREDICTIONS: 'weather.predictions',
 };
 
 // Encryption utilities
@@ -39,7 +56,7 @@ function encryptWeatherData(data) {
   
   const encrypted = Buffer.concat([
     cipher.update(JSON.stringify(data), 'utf8'),
-    cipher.final()
+    cipher.final(),
   ]);
   
   const authTag = cipher.getAuthTag();
@@ -47,7 +64,7 @@ function encryptWeatherData(data) {
   return {
     encrypted: encrypted.toString('base64'),
     iv: iv.toString('base64'),
-    authTag: authTag.toString('base64')
+    authTag: authTag.toString('base64'),
   };
 }
 
@@ -62,40 +79,36 @@ function decryptWeatherData(encryptedData) {
   
   const decrypted = Buffer.concat([
     decipher.update(Buffer.from(encryptedData.encrypted, 'base64')),
-    decipher.final()
+    decipher.final(),
   ]);
   
   return JSON.parse(decrypted.toString('utf8'));
 }
 
 async function initializeTopics() {
-  try {
-    await admin.connect();
-    
-    const existingTopics = await admin.listTopics();
-    const topicsToCreate = Object.values(TOPICS).filter(
-      topic => !existingTopics.includes(topic)
-    );
-    
-    if (topicsToCreate.length > 0) {
-      await admin.createTopics({
-        topics: topicsToCreate.map(topic => ({
-          topic,
-          numPartitions: 3,
-          replicationFactor: 1,
-          configEntries: [
-            { name: 'retention.ms', value: '604800000' }, // 7 days
-            { name: 'compression.type', value: 'snappy' }
-          ]
-        }))
-      });
-    }
-    
-    await admin.disconnect();
-  } catch (error) {
-    console.error('Failed to initialize Kafka topics:', error);
-    throw error;
+  await admin.connect();
+  
+  const existingTopics = await admin.listTopics();
+  const topicsToCreate = Object.values(TOPICS).filter(
+    topic => !existingTopics.includes(topic)
+  );
+  
+  if (topicsToCreate.length > 0) {
+    await admin.createTopics({
+      topics: topicsToCreate.map(topic => ({
+        topic,
+        numPartitions: 10,
+        replicationFactor: 3,
+        configEntries: [
+          { name: 'compression.type', value: 'gzip' },
+          { name: 'retention.ms', value: '2592000000' }, // 30 days
+          { name: 'segment.ms', value: '86400000' }, // 1 day
+        ],
+      })),
+    });
   }
+  
+  await admin.disconnect();
 }
 
 module.exports = {
@@ -106,5 +119,5 @@ module.exports = {
   TOPICS,
   encryptWeatherData,
   decryptWeatherData,
-  initializeTopics
+  initializeTopics,
 };
