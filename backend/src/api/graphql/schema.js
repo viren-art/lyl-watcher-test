@@ -1,68 +1,113 @@
 const { gql } = require('apollo-server-express');
 
 const typeDefs = gql`
+  scalar DateTime
+  scalar JSON
+
   type Query {
     # Weather queries
-    weatherPrediction(gridRegionId: Int!, forecastHours: Int): WeatherPrediction
-    weatherHistory(gridRegionId: Int!, hours: Int): [WeatherData!]!
-    currentWeather(gridRegionId: Int!): WeatherData
-    
+    weatherPrediction(predictionId: ID!): WeatherPrediction
+    weatherPredictions(
+      regionId: Int!
+      startTime: DateTime
+      endTime: DateTime
+      limit: Int
+      cursor: String
+    ): WeatherPredictionConnection!
+    latestWeatherPrediction(regionId: Int!): WeatherPrediction
+
     # Grid queries
-    gridImpact(gridRegionId: Int!, weatherPredictionId: String, forecastHours: Int): GridImpact
-    gridImpacts(gridRegionId: Int!, severity: Severity, limit: Int): [GridImpact!]!
-    gridRegions: [GridRegion!]!
-    substations(gridRegionId: Int!): [Substation!]!
-    
-    # Multi-region queries
-    multiRegionWeather(regionIds: [Int!]!): [RegionWeatherSummary!]!
-    multiRegionComparison(regionIds: [Int!]!): RegionComparison!
+    gridImpact(impactId: ID!): GridImpact
+    gridImpacts(
+      regionId: Int!
+      severity: ImpactSeverity
+      startTime: DateTime
+      endTime: DateTime
+      limit: Int
+      cursor: String
+    ): GridImpactConnection!
+    latestGridImpact(regionId: Int!): GridImpact
+    gridRegions(subscriptionOnly: Boolean): [GridRegion!]!
+    substations(regionId: Int!): [Substation!]!
+
+    # BESS queries
+    bessRecommendations(
+      regionId: Int!
+      status: BessStatus
+      minOptimizationScore: Float
+      limit: Int
+      cursor: String
+    ): BessRecommendationConnection!
+    bessRoiAnalysis(locationId: Int!): BessRoiAnalysis
+
+    # Analytics queries
+    predictionAccuracy(
+      modelType: ModelType!
+      startDate: DateTime!
+      endDate: DateTime!
+      regionId: Int
+    ): PredictionAccuracy!
+    customerUsage(
+      customerId: Int
+      startDate: DateTime!
+      endDate: DateTime!
+    ): CustomerUsage!
   }
 
+  type Mutation {
+    # Weather mutations
+    createWeatherPrediction(input: WeatherPredictionInput!): WeatherPrediction!
+
+    # Grid mutations
+    createGridImpactAnalysis(input: GridImpactInput!): GridImpact!
+    subscribeGridAlerts(input: GridAlertSubscriptionInput!): GridAlertSubscription!
+
+    # BESS mutations
+    optimizeBessLocation(input: BessOptimizationInput!): BessOptimization!
+    analyzeBessRoi(input: BessRoiInput!): BessRoiAnalysis!
+  }
+
+  # Weather types
   type WeatherPrediction {
-    predictionId: String!
+    predictionId: ID!
     gridRegionId: Int!
-    generatedAt: String!
-    predictions: [HourlyPrediction!]!
+    generatedAt: DateTime!
+    predictions: [WeatherDataPoint!]!
     modelVersion: String!
-    confidenceScore: Float!
   }
 
-  type HourlyPrediction {
-    timestamp: String!
+  type WeatherDataPoint {
+    timestamp: DateTime!
     temperature: Float
     windSpeed: Float
     precipitation: Float
     humidity: Float
     solarRadiation: Float
     confidenceScore: Float!
-    condition: String
   }
 
-  type WeatherData {
-    timestamp: String!
+  type WeatherPredictionConnection {
+    predictions: [WeatherPrediction!]!
+    nextCursor: String
+    totalCount: Int!
+  }
+
+  input WeatherPredictionInput {
     gridRegionId: Int!
-    temperature: Float
-    windSpeed: Float
-    precipitation: Float
-    humidity: Float
-    solarRadiation: Float
-    location: Location!
+    forecastHours: Int!
+    parameters: [String!]
   }
 
-  type Location {
-    lat: Float!
-    lon: Float!
-  }
-
+  # Grid types
   type GridImpact {
-    impactId: String!
+    impactId: ID!
     gridRegionId: Int!
-    timestamp: String!
-    predictedLoad: Float!
-    predictedGeneration: Float
+    timestamp: DateTime!
+    predictedLoadMw: Float!
+    predictedGenerationMw: Float
     stressIndex: Int!
     outageProbability: Float!
-    severity: Severity!
+    impactSeverity: ImpactSeverity!
     affectedSubstations: [AffectedSubstation!]!
     recommendations: [String!]!
     modelVersion: String!
@@ -71,72 +116,176 @@ const typeDefs = gql`
   type AffectedSubstation {
     substationId: Int!
     substationName: String!
-    riskLevel: Severity!
-    predictedLoad: Float
-    capacity: Float
+    riskLevel: ImpactSeverity!
+  }
+
+  type GridImpactConnection {
+    impacts: [GridImpact!]!
+    nextCursor: String
+    totalCount: Int!
   }
 
   type GridRegion {
     gridRegionId: Int!
     regionName: String!
     utilityProvider: String
-    currentCapacity: Float!
-    peakDemand: Float!
+    currentCapacityMw: Float!
+    peakDemandMw: Float!
     renewablePercentage: Float
-    boundaryPolygon: String
+    boundaryPolygon: JSON
   }
 
   type Substation {
     substationId: Int!
     substationName: String!
     location: Location!
-    capacity: Float!
-    voltage: Float!
+    capacityMw: Float!
+    voltageKv: Float!
     status: String!
   }
 
-  type RegionWeatherSummary {
+  type Location {
+    lat: Float!
+    lon: Float!
+  }
+
+  type GridAlertSubscription {
+    subscriptionId: ID!
+    active: Boolean!
+  }
+
+  input GridImpactInput {
     gridRegionId: Int!
-    regionName: String!
-    currentWeather: WeatherData
-    forecast24h: [HourlyPrediction!]!
-    gridImpact: GridImpact
-    alerts: [Alert!]!
+    weatherPredictionId: ID
+    forecastHours: Int
   }
 
-  type RegionComparison {
-    regions: [GridRegion!]!
-    metrics: [ComparisonMetric!]!
-    timestamp: String!
-  }
-
-  type ComparisonMetric {
-    name: String!
-    unit: String
-    values: [RegionMetricValue!]!
-  }
-
-  type RegionMetricValue {
+  input GridAlertSubscriptionInput {
     gridRegionId: Int!
-    value: Float!
-    delta: Float
-    trend: String
+    severityThreshold: ImpactSeverity!
+    webhookUrl: String!
+    email: String
   }
 
-  type Alert {
-    id: String!
-    severity: Severity!
-    title: String!
-    message: String!
-    timestamp: String!
-    recommendations: [String!]
-  }
-
-  enum Severity {
+  enum ImpactSeverity {
     LOW
     MEDIUM
     HIGH
     CRITICAL
+  }
+
+  # BESS types
+  type BessOptimization {
+    optimizationId: ID!
+    gridRegionId: Int!
+    locations: [BessLocation!]!
+    generatedAt: DateTime!
+  }
+
+  type BessLocation {
+    locationId: Int!
+    locationName: String
+    coordinates: Location!
+    h3Index: String!
+    recommendedCapacityMwh: Float!
+    recommendedPowerMw: Float!
+    optimizationScore: Float!
+    roiEstimate: Float
+    gridConnectionCostUsd: Float
+    deploymentPriority: Int!
+    justification: String!
+  }
+
+  type BessRecommendationConnection {
+    recommendations: [BessLocation!]!
+    nextCursor: String
+    totalCount: Int!
+  }
+
+  type BessRoiAnalysis {
+    locationId: Int!
+    implementationCostUsd: Float!
+    annualEnergySavingsUsd: Float!
+    annualGridStabilityValueUsd: Float!
+    totalRoi: Float!
+    paybackYears: Float!
+    npv: Float!
+    irr: Float!
+    comparisonToTraditionalMethod: TraditionalComparison!
+  }
+
+  type TraditionalComparison {
+    traditionalRoi: Float!
+    improvementPercentage: Float!
+  }
+
+  input BessOptimizationInput {
+    gridRegionId: Int!
+    capacityMwh: Float!
+    budgetUsd: Float
+    deploymentTimelineMonths: Int
+    constraints: JSON
+  }
+
+  input BessRoiInput {
+    locationId: Int!
+    analysisYears: Int
+  }
+
+  enum BessStatus {
+    PROPOSED
+    APPROVED
+    UNDER_CONSTRUCTION
+    DEPLOYED
+    DECOMMISSIONED
+  }
+
+  # Analytics types
+  type PredictionAccuracy {
+    modelType: ModelType!
+    overallAccuracy: Float!
+    accuracyByRegion: [RegionAccuracy!]!
+    accuracyTrend: [AccuracyTrendPoint!]!
+  }
+
+  type RegionAccuracy {
+    gridRegionId: Int!
+    regionName: String!
+    accuracy: Float!
+  }
+
+  type AccuracyTrendPoint {
+    date: DateTime!
+    accuracy: Float!
+  }
+
+  type CustomerUsage {
+    customerId: Int!
+    companyName: String!
+    subscriptionTier: SubscriptionTier!
+    apiCallsTotal: Int!
+    apiCallsByEndpoint: JSON!
+    rateLimitExceeded: Int!
+    averageResponseTimeMs: Float!
+    topRegionsQueried: [RegionQueryStats!]!
+  }
+
+  type RegionQueryStats {
+    gridRegionId: Int!
+    regionName: String!
+    queryCount: Int!
+  }
+
+  enum ModelType {
+    WEATHER_LSTM
+    GRID_TRANSFORMER
+    BESS_RL
+  }
+
+  enum SubscriptionTier {
+    BASIC
+    PROFESSIONAL
+    ENTERPRISE
   }
 `;
 
