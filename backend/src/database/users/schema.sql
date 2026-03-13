@@ -36,6 +36,15 @@ CREATE TABLE users (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- MFA backup codes table
+CREATE TABLE mfa_backup_codes (
+  backup_code_id    SERIAL PRIMARY KEY,
+  user_id           INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  code_hash         VARCHAR(128) NOT NULL,
+  used_at           TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Grid regions table (simplified for auth context)
 CREATE TABLE grid_regions (
   grid_region_id    SERIAL PRIMARY KEY,
@@ -68,6 +77,8 @@ CREATE TABLE security_audit_log (
 -- Indexes for performance
 CREATE INDEX idx_users_customer ON users(customer_id);
 CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_mfa_backup_codes_user ON mfa_backup_codes(user_id);
+CREATE INDEX idx_mfa_backup_codes_unused ON mfa_backup_codes(user_id, used_at) WHERE used_at IS NULL;
 CREATE INDEX idx_customer_regions_customer ON customer_regions(customer_id);
 CREATE INDEX idx_customer_regions_region ON customer_regions(grid_region_id);
 CREATE INDEX idx_security_audit_user_time ON security_audit_log(user_id, timestamp DESC);
@@ -103,3 +114,7 @@ INSERT INTO grid_regions (region_name) VALUES
 -- Retention policy for security audit logs (2 years per NFR-007)
 CREATE INDEX idx_security_audit_timestamp ON security_audit_log(timestamp);
 -- Note: Implement automated cleanup job to delete records older than 2 years
+
+-- Retention policy for used backup codes (delete after 90 days)
+CREATE INDEX idx_mfa_backup_codes_used_at ON mfa_backup_codes(used_at) WHERE used_at IS NOT NULL;
+-- Note: Implement automated cleanup job to delete used codes older than 90 days

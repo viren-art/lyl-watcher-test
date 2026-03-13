@@ -202,6 +202,103 @@ class UserRepository {
     const result = await this.pool.query(query, [role, userId]);
     return result.rows[0];
   }
+
+  async getPendingCustomers() {
+    const query = `
+      SELECT 
+        c.*,
+        u.email as admin_email,
+        u.full_name as admin_name
+      FROM b2b_customers c
+      JOIN users u ON c.customer_id = u.customer_id AND u.role = 'ADMIN'
+      WHERE c.active = false
+      ORDER BY c.created_at DESC
+    `;
+    const result = await this.pool.query(query);
+    return result.rows;
+  }
+
+  async getCustomerAdminUser(customerId) {
+    const query = `
+      SELECT * FROM users
+      WHERE customer_id = $1 AND role = 'ADMIN'
+      LIMIT 1
+    `;
+    const result = await this.pool.query(query, [customerId]);
+    return result.rows[0];
+  }
+
+  async storeBackupCodes(userId, hashedCodes) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const insertQuery = `
+        INSERT INTO mfa_backup_codes (user_id, code_hash)
+        VALUES ($1, $2)
+      `;
+
+      for (const codeHash of hashedCodes) {
+        await client.query(insertQuery, [userId, codeHash]);
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getBackupCodes(userId) {
+    const query = `
+      SELECT backup_code_id, code_hash, used_at, created_at
+      FROM mfa_backup_codes
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `;
+    const result = await this.pool.query(query, [userId]);
+    return result.rows;
+  }
+
+  async markBackupCodeUsed(backupCodeId) {
+    const query = `
+      UPDATE mfa_backup_codes
+      SET used_at = now()
+      WHERE backup_code_id = $1
+      RETURNING *
+    `;
+    const result = await this.pool.query(query, [backupCodeId]);
+    return result.rows[0];
+  }
+
+  async replaceBackupCodes(userId, hashedCodes) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Delete old backup codes
+      await client.query('DELETE FROM mfa_backup_codes WHERE user_id = $1', [userId]);
+
+      // Insert new backup codes
+      const insertQuery = `
+        INSERT INTO mfa_backup_codes (user_id, code_hash)
+        VALUES ($1, $2)
+      `;
+
+      for (const codeHash of hashedCodes) {
+        await client.query(insertQuery, [userId, codeHash]);
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = UserRepository;

@@ -83,10 +83,13 @@ class AuthController {
 
   /**
    * POST /api/v1/auth/mfa/setup
+   * Requires authentication (user must be logged in with temporary token or during first login)
    */
   async setupMfa(req, res) {
     try {
       const { userId } = req.body;
+      const ipAddress = req.ip || req.connection.remoteAddress;
+      const userAgent = req.get('user-agent');
 
       if (!userId) {
         return res.status(400).json({
@@ -100,7 +103,7 @@ class AuthController {
         });
       }
 
-      const result = await this.authService.setupMfa(userId);
+      const result = await this.authService.setupMfa(userId, ipAddress, userAgent);
 
       res.status(200).json({
         success: true,
@@ -201,6 +204,53 @@ class AuthController {
         success: false,
         error: {
           code: 'UNAUTHORIZED',
+          message: error.message,
+          timestamp: new Date().toISOString(),
+          requestId: req.id
+        }
+      });
+    }
+  }
+
+  /**
+   * POST /api/v1/auth/mfa/regenerate-backup-codes
+   * Requires authentication
+   */
+  async regenerateBackupCodes(req, res) {
+    try {
+      const { verificationCode } = req.body;
+      const ipAddress = req.ip || req.connection.remoteAddress;
+      const userAgent = req.get('user-agent');
+
+      if (!verificationCode) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Verification code required',
+            timestamp: new Date().toISOString(),
+            requestId: req.id
+          }
+        });
+      }
+
+      // req.user populated by auth middleware
+      const result = await this.authService.regenerateBackupCodes(
+        req.user.userId,
+        verificationCode,
+        ipAddress,
+        userAgent
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'BACKUP_CODES_REGENERATION_FAILED',
           message: error.message,
           timestamp: new Date().toISOString(),
           requestId: req.id

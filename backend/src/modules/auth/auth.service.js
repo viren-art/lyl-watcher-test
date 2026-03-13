@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const UserRepository = require('../../database/users/user.repository');
 const SecurityAuditRepository = require('../../database/users/security-audit.repository');
 const EmailService = require('../../services/email/email.service');
@@ -164,34 +165,11 @@ class AuthService {
         };
       }
 
-      // First-time login - require MFA setup
-      if (!user.mfa_enabled && !user.last_login) {
-        await this.securityAuditRepository.logEvent({
-          userId: user.user_id,
-          eventType: 'login_mfa_setup_required',
-          resourceAccessed: 'auth',
-          ipAddress,
-          userAgent,
-          success: true
-        });
-
-        return {
-          requiresMfaSetup: true,
-          userId: user.user_id,
-          message: 'MFA setup required for first login'
-        };
-      }
-
-      // Generate tokens
-      const tokens = await this._generateTokens(user);
-
-      // Update last login
-      await this.userRepository.updateLastLogin(user.user_id);
-
-      // Log successful login
+      // MFA not enabled - require setup for security
+      // This enforces MFA for all users, not just first-time login
       await this.securityAuditRepository.logEvent({
         userId: user.user_id,
-        eventType: 'login',
+        eventType: 'login_mfa_setup_required',
         resourceAccessed: 'auth',
         ipAddress,
         userAgent,
@@ -199,8 +177,9 @@ class AuthService {
       });
 
       return {
-        ...tokens,
-        user: this._sanitizeUser(user)
+        requiresMfaSetup: true,
+        userId: user.user_id,
+        message: 'MFA setup required for security compliance'
       };
     } catch (error) {
       throw error;
@@ -208,9 +187,9 @@ class AuthService {
   }
 
   /**
-   * Setup MFA for user - generates secret and QR code
+   * Setup MFA for user - generates secret, QR code, and backup codes
    */
-  async setupMfa(userId) {
+  async setupMfa(userId, ipAddress, userAgent) {
     try {
       const user = await this.userRepository.findUserById(userId);
       if (!user) {
@@ -227,17 +206,39 @@ class AuthService {
         issuer: 'Grid AI Platform'
       });
 
+      // Generate 10 backup codes (8-character alphanumeric)
+      const backupCodes = this._generateBackupCodes(10);
+      
+      // Hash backup codes for storage
+      const hashedBackupCodes = await Promise.all(
+        backupCodes.map(code => bcrypt.hash(code, 10))
+      );
+
       // Encrypt and store secret (temporarily until verified)
       const encryptedSecret = this._encryptMfaSecret(secret.base32);
       await this.userRepository.updateMfaSecret(userId, encryptedSecret);
+      
+      // Store hashed backup codes
+      await this.userRepository.storeBackupCodes(userId, hashedBackupCodes);
 
       // Generate QR code
       const qrCodeDataUrl = await QRCode.toDataURL(secret.otpauth_url);
 
+      // Log MFA setup initiation
+      await this.securityAuditRepository.logEvent({
+        userId: user.user_id,
+        eventType: 'mfa_setup_initiated',
+        resourceAccessed: 'auth',
+        ipAddress,
+        userAgent,
+        success: true
+      });
+
       return {
         qrCodeDataUrl,
         secret: secret.base32,
-        message: 'Scan QR code with authenticator app'
+        backupCodes, // Return plaintext codes once for user to save
+        message: 'Scan QR code with authenticator app and save backup codes securely'
       };
     } catch (error) {
       throw error;
@@ -312,7 +313,7 @@ class AuthService {
   }
 
   /**
-   * Verify MFA code during login
+   * Verify MFA code during login (supports TOTP and backup codes)
    */
   async verifyMfaLogin(userId, code, ipAddress, userAgent) {
     try {
@@ -321,27 +322,85 @@ class AuthService {
         throw new Error('Invalid MFA verification request');
       }
 
-      // Decrypt secret
-      const secret = this._decryptMfaSecret(user.mfa_secret);
+      // Check if code is a backup code (8 characters alphanumeric)
+      const isBackupCode = /^[A-Z0-9]{8}$/.test(code);
 
-      // Verify TOTP code
-      const verified = speakeasy.totp.verify({
-        secret,
-        encoding: 'base32',
-        token: code,
-        window: 2
-      });
+      if (isBackupCode) {
+        // Verify backup code
+        const backupCodes = await this.userRepository.getBackupCodes(userId);
+        let codeValid = false;
+        let usedCodeId = null;
 
-      if (!verified) {
+        for (const storedCode of backupCodes) {
+          if (!storedCode.used_at) {
+            const matches = await bcrypt.compare(code, storedCode.code_hash);
+            if (matches) {
+              codeValid = true;
+              usedCodeId = storedCode.backup_code_id;
+              break;
+            }
+          }
+        }
+
+        if (!codeValid) {
+          await this.securityAuditRepository.logEvent({
+            userId: user.user_id,
+            eventType: 'login_backup_code_failed',
+            resourceAccessed: 'auth',
+            ipAddress,
+            userAgent,
+            success: false
+          });
+          throw new Error('Invalid or already used backup code');
+        }
+
+        // Mark backup code as used
+        await this.userRepository.markBackupCodeUsed(usedCodeId);
+
+        // Log backup code usage
         await this.securityAuditRepository.logEvent({
           userId: user.user_id,
-          eventType: 'login_mfa_failed',
+          eventType: 'login_backup_code_used',
           resourceAccessed: 'auth',
           ipAddress,
           userAgent,
-          success: false
+          success: true,
+          metadata: { backupCodeId: usedCodeId }
         });
-        throw new Error('Invalid verification code');
+
+        // Check remaining backup codes
+        const remainingCodes = backupCodes.filter(c => !c.used_at && c.backup_code_id !== usedCodeId).length;
+        
+        // Send warning if low on backup codes
+        if (remainingCodes <= 2) {
+          await this.emailService.sendLowBackupCodesWarning({
+            to: user.email,
+            fullName: user.full_name,
+            remainingCodes
+          });
+        }
+      } else {
+        // Verify TOTP code
+        const secret = this._decryptMfaSecret(user.mfa_secret);
+
+        const verified = speakeasy.totp.verify({
+          secret,
+          encoding: 'base32',
+          token: code,
+          window: 2
+        });
+
+        if (!verified) {
+          await this.securityAuditRepository.logEvent({
+            userId: user.user_id,
+            eventType: 'login_mfa_failed',
+            resourceAccessed: 'auth',
+            ipAddress,
+            userAgent,
+            success: false
+          });
+          throw new Error('Invalid verification code');
+        }
       }
 
       // Generate tokens
@@ -363,6 +422,72 @@ class AuthService {
       return {
         ...tokens,
         user: this._sanitizeUser(user)
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Regenerate backup codes (requires MFA verification)
+   */
+  async regenerateBackupCodes(userId, verificationCode, ipAddress, userAgent) {
+    try {
+      const user = await this.userRepository.findUserById(userId);
+      if (!user || !user.mfa_enabled) {
+        throw new Error('MFA not enabled');
+      }
+
+      // Verify current TOTP code before regenerating
+      const secret = this._decryptMfaSecret(user.mfa_secret);
+      const verified = speakeasy.totp.verify({
+        secret,
+        encoding: 'base32',
+        token: verificationCode,
+        window: 2
+      });
+
+      if (!verified) {
+        await this.securityAuditRepository.logEvent({
+          userId: user.user_id,
+          eventType: 'backup_codes_regeneration_failed',
+          resourceAccessed: 'auth',
+          ipAddress,
+          userAgent,
+          success: false
+        });
+        throw new Error('Invalid verification code');
+      }
+
+      // Generate new backup codes
+      const backupCodes = this._generateBackupCodes(10);
+      const hashedBackupCodes = await Promise.all(
+        backupCodes.map(code => bcrypt.hash(code, 10))
+      );
+
+      // Replace old backup codes
+      await this.userRepository.replaceBackupCodes(userId, hashedBackupCodes);
+
+      // Log backup codes regeneration
+      await this.securityAuditRepository.logEvent({
+        userId: user.user_id,
+        eventType: 'backup_codes_regenerated',
+        resourceAccessed: 'auth',
+        ipAddress,
+        userAgent,
+        success: true
+      });
+
+      // Send email notification
+      await this.emailService.sendBackupCodesRegenerated({
+        to: user.email,
+        fullName: user.full_name
+      });
+
+      return {
+        success: true,
+        backupCodes,
+        message: 'New backup codes generated. Save them securely.'
       };
     } catch (error) {
       throw error;
@@ -476,10 +601,22 @@ class AuthService {
     return `gai_${uuidv4().replace(/-/g, '')}`;
   }
 
+  _generateBackupCodes(count) {
+    const codes = [];
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude ambiguous characters
+    
+    for (let i = 0; i < count; i++) {
+      let code = '';
+      for (let j = 0; j < 8; j++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      codes.push(code);
+    }
+    
+    return codes;
+  }
+
   _encryptMfaSecret(secret) {
-    // In production, use proper encryption (AES-256-GCM)
-    // For now, using base64 encoding as placeholder
-    const crypto = require('crypto');
     const algorithm = 'aes-256-gcm';
     const key = Buffer.from(process.env.MFA_ENCRYPTION_KEY, 'hex');
     const iv = crypto.randomBytes(16);
@@ -498,7 +635,6 @@ class AuthService {
   }
 
   _decryptMfaSecret(encryptedData) {
-    const crypto = require('crypto');
     const algorithm = 'aes-256-gcm';
     const key = Buffer.from(process.env.MFA_ENCRYPTION_KEY, 'hex');
     

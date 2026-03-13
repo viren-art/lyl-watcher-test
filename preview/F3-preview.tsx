@@ -8,6 +8,14 @@ export default function AuthPreview() {
   const [userRole, setUserRole] = useState('GRID_ANALYST');
   const [selectedRegion, setSelectedRegion] = useState(null);
   const [showAccessDenied, setShowAccessDenied] = useState(false);
+  const [showBackupCodes, setShowBackupCodes] = useState(false);
+  const [backupCodes, setBackupCodes] = useState([
+    'A3K9P2M7', 'B8L4Q6N1', 'C2R7T5W9', 'D6Y3H8J4',
+    'E1M9K7P2', 'F5N3L8Q6', 'G9W2R4T7', 'H4J6Y8M1',
+    'J7P5K3N9', 'K2L8Q4W6'
+  ]);
+  const [usedBackupCodes, setUsedBackupCodes] = useState([]);
+  const [showBackupCodeWarning, setShowBackupCodeWarning] = useState(false);
 
   const mockRegions = [
     { id: 1, name: 'Northeast', subscribed: true },
@@ -19,10 +27,11 @@ export default function AuthPreview() {
 
   const mockAuditLogs = [
     { id: 1, event: 'login', user: 'สมชาย วงศ์ไทย', time: '2024-01-15 14:23:45', success: true, ip: '203.154.12.45' },
-    { id: 2, event: 'access_denied', user: 'สุภาพ ใจดี', time: '2024-01-15 14:18:12', success: false, ip: '203.154.12.46' },
-    { id: 3, event: 'mfa_setup', user: 'ประยุทธ์ สุขใจ', time: '2024-01-15 13:45:22', success: true, ip: '203.154.12.47' },
-    { id: 4, event: 'login', user: 'วิไล ศรีสุข', time: '2024-01-15 13:12:08', success: true, ip: '203.154.12.48' },
-    { id: 5, event: 'login_failed', user: 'นิรันดร์ มั่นคง', time: '2024-01-15 12:55:33', success: false, ip: '203.154.12.49' }
+    { id: 2, event: 'backup_code_used', user: 'สมชาย วงศ์ไทย', time: '2024-01-15 14:20:12', success: true, ip: '203.154.12.45' },
+    { id: 3, event: 'access_denied', user: 'สุภาพ ใจดี', time: '2024-01-15 14:18:12', success: false, ip: '203.154.12.46' },
+    { id: 4, event: 'mfa_setup', user: 'ประยุทธ์ สุขใจ', time: '2024-01-15 13:45:22', success: true, ip: '203.154.12.47' },
+    { id: 5, event: 'backup_codes_regenerated', user: 'วิไล ศรีสุข', time: '2024-01-15 13:30:08', success: true, ip: '203.154.12.48' },
+    { id: 6, event: 'login_failed', user: 'นิรันดร์ มั่นคง', time: '2024-01-15 12:55:33', success: false, ip: '203.154.12.49' }
   ];
 
   const rolePermissions = {
@@ -39,10 +48,20 @@ export default function AuthPreview() {
   };
 
   const handleMfaVerify = () => {
-    if (mfaCode.length === 6) {
+    if (mfaCode.length === 6 || mfaCode.length === 8) {
+      // Check if it's a backup code
+      if (mfaCode.length === 8 && backupCodes.includes(mfaCode)) {
+        setUsedBackupCodes([...usedBackupCodes, mfaCode]);
+        const remaining = backupCodes.filter(c => !usedBackupCodes.includes(c) && c !== mfaCode).length;
+        if (remaining <= 2) {
+          setShowBackupCodeWarning(true);
+          setTimeout(() => setShowBackupCodeWarning(false), 5000);
+        }
+      }
       setIsAuthenticated(true);
       setView('dashboard');
       setShowMfaSetup(false);
+      setMfaCode('');
     }
   };
 
@@ -56,9 +75,22 @@ export default function AuthPreview() {
     }
   };
 
+  const handleRegenerateBackupCodes = () => {
+    const newCodes = [
+      'X9M2K7P4', 'Y3L8Q5N6', 'Z7R4T2W1', 'A8Y6H3J9',
+      'B2M4K9P7', 'C6N8L3Q5', 'D1W7R9T4', 'E5J3Y2M8',
+      'F9P7K4N2', 'G3L5Q8W1'
+    ];
+    setBackupCodes(newCodes);
+    setUsedBackupCodes([]);
+    setShowBackupCodes(true);
+  };
+
   const hasPermission = (permission) => {
     return rolePermissions[userRole]?.includes(permission) || false;
   };
+
+  const remainingBackupCodes = backupCodes.filter(c => !usedBackupCodes.includes(c)).length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-zinc-900 to-slate-950">
@@ -98,6 +130,89 @@ export default function AuthPreview() {
                 <p className="text-sm font-semibold text-rose-400">Access Denied</p>
                 <p className="text-xs text-zinc-400">Region not subscribed: {selectedRegion?.name}</p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Code Warning Toast */}
+      {showBackupCodeWarning && (
+        <div className="fixed top-20 right-6 z-50 animate-slide-in">
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <p className="text-sm font-semibold text-amber-400">Low Backup Codes</p>
+                <p className="text-xs text-zinc-400">Only {remainingBackupCodes} backup codes remaining. Regenerate soon.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Codes Modal */}
+      {showBackupCodes && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <div className="bg-zinc-800 rounded-2xl p-8 max-w-2xl w-full border border-white/10 shadow-2xl">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">🔑</span>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Backup Recovery Codes</h3>
+                  <p className="text-sm text-zinc-400">Save these codes securely. Each can be used once.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowBackupCodes(false)}
+                className="text-zinc-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-zinc-900/50 rounded-xl p-6 mb-6">
+              <div className="grid grid-cols-2 gap-3">
+                {backupCodes.map((code, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white/5 rounded-lg px-4 py-3 border border-white/10 font-mono text-center"
+                  >
+                    <span className="text-violet-400 text-lg">{code}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 mb-6">
+              <div className="flex items-start gap-3">
+                <span className="text-xl">⚠️</span>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-amber-400 mb-1">Important Security Notice</p>
+                  <ul className="text-xs text-zinc-400 space-y-1">
+                    <li>• Store these codes in a secure password manager</li>
+                    <li>• Each code can only be used once</li>
+                    <li>• Use backup codes if you lose access to your authenticator app</li>
+                    <li>• Regenerate codes if you suspect they've been compromised</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(backupCodes.join('\n'));
+                }}
+                className="flex-1 rounded-xl bg-white/5 border border-white/10 py-3 px-4 font-semibold text-white hover:bg-white/10 transition-all"
+              >
+                📋 Copy to Clipboard
+              </button>
+              <button
+                onClick={() => setShowBackupCodes(false)}
+                className="flex-1 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 py-3 px-4 font-semibold text-white hover:from-violet-600 hover:to-purple-700 transition-all"
+              >
+                I've Saved These Codes
+              </button>
             </div>
           </div>
         </div>
@@ -181,24 +296,43 @@ export default function AuthPreview() {
                   <p className="text-sm font-mono text-violet-400">JBSW Y3DP EHPK 3PXP</p>
                 </div>
 
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 mb-6">
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">💾</span>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-amber-400 mb-1">Backup Codes Generated</p>
+                      <p className="text-xs text-zinc-400">10 backup codes have been generated. You'll see them after verification.</p>
+                    </div>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-zinc-300 mb-2">Verification Code</label>
+                  <label className="block text-sm font-medium text-zinc-300 mb-2">
+                    Verification Code (6 digits) or Backup Code (8 chars)
+                  </label>
                   <input
                     type="text"
                     value={mfaCode}
-                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="000000"
-                    maxLength={6}
+                    onChange={(e) => setMfaCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                    placeholder="000000 or A3K9P2M7"
+                    maxLength={8}
                     className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-center text-2xl font-mono text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50 tracking-widest"
                   />
                 </div>
 
                 <button
                   onClick={handleMfaVerify}
-                  disabled={mfaCode.length !== 6}
+                  disabled={mfaCode.length !== 6 && mfaCode.length !== 8}
                   className="w-full mt-6 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 py-3 px-4 font-semibold text-white hover:from-violet-600 hover:to-purple-700 active:scale-[0.98] transition-all shadow-lg shadow-violet-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Verify & Continue
+                </button>
+
+                <button
+                  onClick={() => setShowBackupCodes(true)}
+                  className="w-full mt-3 rounded-xl bg-white/5 border border-white/10 py-3 px-4 font-semibold text-zinc-400 hover:bg-white/10 hover:text-white transition-all"
+                >
+                  View Backup Codes
                 </button>
               </div>
             )}
@@ -206,6 +340,28 @@ export default function AuthPreview() {
         ) : (
           /* Dashboard */
           <div className="space-y-6">
+            {/* MFA Status Card */}
+            <div className="bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 rounded-2xl p-6 border border-emerald-500/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <span className="text-3xl">🔐</span>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-emerald-300">MFA Enabled & Active</p>
+                    <p className="text-xs text-zinc-400">
+                      {remainingBackupCodes} of 10 backup codes remaining
+                      {remainingBackupCodes <= 2 && <span className="text-amber-400 ml-2">⚠️ Low backup codes!</span>}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleRegenerateBackupCodes}
+                  className="rounded-xl bg-violet-500/20 border border-violet-500/30 px-4 py-2 text-sm font-semibold text-violet-400 hover:bg-violet-500/30 transition-all"
+                >
+                  Regenerate Codes
+                </button>
+              </div>
+            </div>
+
             {/* Role & Permissions */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="bg-zinc-800/50 rounded-2xl p-6 border border-white/[0.06] shadow-lg shadow-black/20">
