@@ -15,7 +15,8 @@ data:
           "timezone": "America/New_York",
           "coordinates": {"lat": 42.3601, "lon": -71.0589},
           "weatherStations": ["KBOS", "KJFK", "KEWR"],
-          "gridProvider": "ISO-NE"
+          "gridProvider": "ISO-NE",
+          "phase": 1
         },
         {
           "id": 2,
@@ -25,7 +26,8 @@ data:
           "timezone": "America/Chicago",
           "coordinates": {"lat": 41.8781, "lon": -87.6298},
           "weatherStations": ["KORD", "KMDW", "KMKE"],
-          "gridProvider": "MISO"
+          "gridProvider": "MISO",
+          "phase": 1
         },
         {
           "id": 3,
@@ -35,7 +37,8 @@ data:
           "timezone": "America/Los_Angeles",
           "coordinates": {"lat": 34.0522, "lon": -118.2437},
           "weatherStations": ["KLAX", "KSFO", "KSAN"],
-          "gridProvider": "CAISO"
+          "gridProvider": "CAISO",
+          "phase": 1
         },
         {
           "id": 4,
@@ -45,7 +48,8 @@ data:
           "timezone": "America/Chicago",
           "coordinates": {"lat": 29.7604, "lon": -95.3698},
           "weatherStations": ["KIAH", "KDFW", "KAUS"],
-          "gridProvider": "ERCOT"
+          "gridProvider": "ERCOT",
+          "phase": 1
         },
         {
           "id": 5,
@@ -55,7 +59,63 @@ data:
           "timezone": "America/Los_Angeles",
           "coordinates": {"lat": 47.6062, "lon": -122.3321},
           "weatherStations": ["KSEA", "KPDX", "KBOI"],
-          "gridProvider": "BPA"
+          "gridProvider": "BPA",
+          "phase": 1
+        },
+        {
+          "id": 6,
+          "name": "Southeast",
+          "code": "SE",
+          "datacenter": "us-east-2",
+          "timezone": "America/New_York",
+          "coordinates": {"lat": 33.7490, "lon": -84.3880},
+          "weatherStations": ["KATL", "KMCO", "KMIA"],
+          "gridProvider": "Southern Company",
+          "phase": 2
+        },
+        {
+          "id": 7,
+          "name": "Northwest",
+          "code": "NW",
+          "datacenter": "us-west-3",
+          "timezone": "America/Los_Angeles",
+          "coordinates": {"lat": 45.5152, "lon": -122.6784},
+          "weatherStations": ["KPDX", "KSEA", "KBOI"],
+          "gridProvider": "BPA",
+          "phase": 2
+        },
+        {
+          "id": 8,
+          "name": "Southwest",
+          "code": "SW",
+          "datacenter": "us-west-1",
+          "timezone": "America/Phoenix",
+          "coordinates": {"lat": 33.4484, "lon": -112.0740},
+          "weatherStations": ["KPHX", "KLAS", "KABQ"],
+          "gridProvider": "Western Area Power",
+          "phase": 3
+        },
+        {
+          "id": 9,
+          "name": "Great Lakes",
+          "code": "GL",
+          "datacenter": "us-central-1",
+          "timezone": "America/Detroit",
+          "coordinates": {"lat": 42.3314, "lon": -83.0458},
+          "weatherStations": ["KDTW", "KCLE", "KPIT"],
+          "gridProvider": "PJM",
+          "phase": 3
+        },
+        {
+          "id": 10,
+          "name": "Mid-Atlantic",
+          "code": "MA",
+          "datacenter": "us-east-1",
+          "timezone": "America/New_York",
+          "coordinates": {"lat": 38.9072, "lon": -77.0369},
+          "weatherStations": ["KDCA", "KBWI", "KPHL"],
+          "gridProvider": "PJM",
+          "phase": 3
         }
       ]
     }
@@ -78,15 +138,17 @@ data:
         - SO
         - PA
       phase2_expansion:
-        - SE  # Southeast
-        - NW  # Northwest
-        - SW  # Southwest
-        - GL  # Great Lakes
-        - MA  # Mid-Atlantic
+        - SE
+        - NW
       phase3_expansion:
-        - RM  # Rocky Mountains
-        - GP  # Great Plains
-        - NP  # Northern Plains
-        - SP  # Southern Plains
-        - AK  # Alaska
-        - HI  # Hawaii
+        - SW
+        - GL
+        - MA
+    
+    database:
+      primary_endpoint: "db.weather-impact.com"
+      replica_endpoints:
+        - "db-replica-west.weather-impact.com"
+        - "db-replica-central.weather-impact.com"
+      failover_enabled: true
+      replication_lag_threshold_ms: 300000

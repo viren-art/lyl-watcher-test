@@ -1,0 +1,9 @@
+{
+  "name": "database-failover",
+  "version": "1.0.0",
+  "description": "Automated database failover for Weather Impact platform",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1490.0"
+  }
+}

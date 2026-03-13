@@ -241,3 +241,114 @@ module "eks_pacific" {
     Region = "Pacific"
   })
 }
+
+# Phase 2 Expansion Regions
+module "eks_southeast" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 19.0"
+  
+  providers = {
+    aws = aws.us-central-1
+  }
+  
+  cluster_name    = "weather-impact-southeast"
+  cluster_version = var.eks_cluster_version
+  
+  vpc_id     = module.vpc_midwest.vpc_id
+  subnet_ids = module.vpc_midwest.private_subnets
+  
+  cluster_endpoint_public_access = true
+  cluster_endpoint_private_access = true
+  
+  cluster_addons = {
+    coredns = {
+      most_recent = true
+    }
+    kube-proxy = {
+      most_recent = true
+    }
+    vpc-cni = {
+      most_recent = true
+    }
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
+  }
+  
+  eks_managed_node_groups = {
+    general = {
+      name = "general-purpose"
+      
+      instance_types = var.eks_node_instance_types
+      capacity_type  = "ON_DEMAND"
+      
+      min_size     = var.eks_min_nodes
+      max_size     = var.eks_max_nodes
+      desired_size = var.eks_min_nodes
+      
+      labels = {
+        role = "general"
+      }
+    }
+  }
+  
+  tags = merge(local.common_tags, {
+    Region = "Southeast"
+    Phase = "2"
+  })
+}
+
+module "eks_northwest" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 19.0"
+  
+  providers = {
+    aws = aws.us-west-2
+  }
+  
+  cluster_name    = "weather-impact-northwest"
+  cluster_version = var.eks_cluster_version
+  
+  vpc_id     = module.vpc_pacific.vpc_id
+  subnet_ids = module.vpc_pacific.private_subnets
+  
+  cluster_endpoint_public_access = true
+  cluster_endpoint_private_access = true
+  
+  cluster_addons = {
+    coredns = {
+      most_recent = true
+    }
+    kube-proxy = {
+      most_recent = true
+    }
+    vpc-cni = {
+      most_recent = true
+    }
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
+  }
+  
+  eks_managed_node_groups = {
+    general = {
+      name = "general-purpose"
+      
+      instance_types = var.eks_node_instance_types
+      capacity_type  = "ON_DEMAND"
+      
+      min_size     = var.eks_min_nodes
+      max_size     = var.eks_max_nodes
+      desired_size = var.eks_min_nodes
+      
+      labels = {
+        role = "general"
+      }
+    }
+  }
+  
+  tags = merge(local.common_tags, {
+    Region = "Northwest"
+    Phase = "2"
+  })
+}

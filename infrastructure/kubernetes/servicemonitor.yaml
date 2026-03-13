@@ -29,3 +29,130 @@ spec:
   - port: metrics
     interval: 30s
     path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bess-optimizer-metrics
+  namespace: weather-impact-prod
+  labels:
+    app: bess-optimizer
+spec:
+  selector:
+    matchLabels:
+      app: bess-optimizer
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: weather-accuracy-alerts
+  namespace: weather-impact-prod
+  labels:
+    prometheus: weather-impact
+spec:
+  groups:
+  - name: weather_prediction_accuracy
+    interval: 60s
+    rules:
+    - alert: WeatherPredictionAccuracyBelowThreshold
+      expr: weather_prediction_accuracy_percent < 85
+      for: 15m
+      labels:
+        severity: critical
+        component: weather-prediction
+      annotations:
+        summary: "Weather prediction accuracy below 85% threshold"
+        description: "Weather prediction accuracy is {{ $value }}% (threshold: 85%). Model retraining may be required."
+    
+    - alert: WeatherPredictionAccuracyDegraded
+      expr: weather_prediction_accuracy_percent < 87 and weather_prediction_accuracy_percent >= 85
+      for: 30m
+      labels:
+        severity: warning
+        component: weather-prediction
+      annotations:
+        summary: "Weather prediction accuracy degraded"
+        description: "Weather prediction accuracy is {{ $value }}% (target: 87%+). Monitor for further degradation."
+    
+    - alert: WeatherPredictionLatencyHigh
+      expr: histogram_quantile(0.95, rate(weather_prediction_latency_seconds_bucket[5m])) > 3
+      for: 10m
+      labels:
+        severity: warning
+        component: weather-prediction
+      annotations:
+        summary: "Weather prediction p95 latency exceeds 3 seconds"
+        description: "95th percentile latency is {{ $value }}s (SLA: 3s). Check model inference performance."
+
+  - name: grid_impact_accuracy
+    interval: 60s
+    rules:
+    - alert: GridImpactAccuracyBelowThreshold
+      expr: grid_impact_accuracy_percent < 80
+      for: 15m
+      labels:
+        severity: critical
+        component: grid-impact
+      annotations:
+        summary: "Grid impact prediction accuracy below 80% threshold"
+        description: "Grid impact accuracy is {{ $value }}% (threshold: 80%). Model retraining required."
+    
+    - alert: GridImpactFalsePositiveRateHigh
+      expr: grid_impact_false_positive_rate > 0.15
+      for: 20m
+      labels:
+        severity: warning
+        component: grid-impact
+      annotations:
+        summary: "Grid impact false positive rate exceeds 15%"
+        description: "False positive rate is {{ $value }} (threshold: 0.15). Review prediction thresholds."
+
+  - name: bess_optimization_performance
+    interval: 60s
+    rules:
+    - alert: BessOptimizationTimeoutRisk
+      expr: bess_optimization_duration_seconds > 900
+      for: 5m
+      labels:
+        severity: warning
+        component: bess-optimizer
+      annotations:
+        summary: "BESS optimization approaching 15-minute SLA"
+        description: "Optimization duration is {{ $value }}s (SLA: 900s). May exceed deadline."
+    
+    - alert: BessOptimizationSLAViolation
+      expr: bess_optimization_duration_seconds > 900
+      for: 1m
+      labels:
+        severity: critical
+        component: bess-optimizer
+      annotations:
+        summary: "BESS optimization exceeded 15-minute SLA"
+        description: "Optimization took {{ $value }}s (SLA: 900s). Investigate performance bottleneck."
+    
+    - alert: BessRoiImprovementBelowTarget
+      expr: bess_roi_improvement_percent < 20
+      for: 10m
+      labels:
+        severity: warning
+        component: bess-optimizer
+      annotations:
+        summary: "BESS ROI improvement below 20% target"
+        description: "Average ROI improvement is {{ $value }}% (target: 20%+). Review optimization algorithm."
+
+  - name: system_uptime
+    interval: 30s
+    rules:
+    - alert: SystemUptimeBelowSLA
+      expr: (sum(up{job=~"weather-prediction|grid-impact|bess-optimizer"}) / count(up{job=~"weather-prediction|grid-impact|bess-optimizer"})) < 0.995
+      for: 5m
+      labels:
+        severity: critical
+        component: platform
+      annotations:
+        summary: "System uptime below 99.5% SLA"
+        description: "Current uptime is {{ $value | humanizePercentage }} (SLA: 99.5%). Investigate service failures."
