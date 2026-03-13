@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { encryptData, decryptData } = require('../../utils/encryption');
 const logger = require('../../utils/logger');
 
 const pool = new Pool({
@@ -10,7 +11,12 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
-  ssl: process.env.TIMESCALEDB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  ssl: process.env.TIMESCALEDB_SSL === 'true' ? {
+    rejectUnauthorized: true,
+    ca: process.env.TIMESCALEDB_SSL_CA_CERT,
+    cert: process.env.TIMESCALEDB_SSL_CLIENT_CERT,
+    key: process.env.TIMESCALEDB_SSL_CLIENT_KEY,
+  } : false,
 });
 
 async function initializeDatabase() {
@@ -21,7 +27,7 @@ async function initializeDatabase() {
     await client.query('CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE');
     await client.query('CREATE EXTENSION IF NOT EXISTS postgis');
     
-    // Create weather_data table
+    // Create weather_data table with encryption metadata
     await client.query(`
       CREATE TABLE IF NOT EXISTS weather_data (
         id BIGSERIAL,
@@ -29,13 +35,12 @@ async function initializeDatabase() {
         grid_region_id INTEGER NOT NULL,
         location GEOMETRY(POINT, 4326) NOT NULL,
         source VARCHAR(50) NOT NULL,
-        temperature NUMERIC(5,2),
-        wind_speed NUMERIC(5,2),
-        precipitation NUMERIC(6,2),
-        humidity NUMERIC(5,2),
-        solar_radiation NUMERIC(8,2),
-        pressure NUMERIC(7,2),
-        conditions TEXT,
+        encrypted_data TEXT NOT NULL,
+        encryption_iv TEXT NOT NULL,
+        encryption_auth_tag TEXT NOT NULL,
+        encryption_salt TEXT NOT NULL,
+        encryption_key_version INTEGER NOT NULL,
+        encryption_algorithm VARCHAR(20) NOT NULL DEFAULT 'aes-256-gcm',
         validated_at TIMESTAMPTZ,
         validator_version VARCHAR(20),
         PRIMARY KEY (timestamp, id)
@@ -61,6 +66,11 @@ async function initializeDatabase() {
       ON weather_data USING GIST(location)
     `);
     
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_weather_key_version 
+      ON weather_data (encryption_key_version)
+    `);
+    
     // Add compression policy (compress data older than 7 days)
     await client.query(`
       SELECT add_compression_policy('weather_data', INTERVAL '7 days', if_not_exists => TRUE)
@@ -71,7 +81,7 @@ async function initializeDatabase() {
       SELECT add_retention_policy('weather_data', INTERVAL '5 years', if_not_exists => TRUE)
     `);
     
-    logger.info('TimescaleDB weather database initialized');
+    logger.info('TimescaleDB weather database initialized with encryption support');
   } catch (error) {
     logger.error('Failed to initialize database', { error: error.message });
     throw error;
@@ -89,27 +99,39 @@ async function storeWeatherData(weatherDataArray) {
     const insertQuery = `
       INSERT INTO weather_data (
         timestamp, grid_region_id, location, source,
-        temperature, wind_speed, precipitation, humidity,
-        solar_radiation, pressure, conditions,
+        encrypted_data, encryption_iv, encryption_auth_tag, 
+        encryption_salt, encryption_key_version, encryption_algorithm,
         validated_at, validator_version
-      ) VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ) VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326), $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (timestamp, id) DO NOTHING
     `;
     
     for (const data of weatherDataArray) {
+      // Encrypt sensitive weather data
+      const sensitiveData = {
+        temperature: data.temperature,
+        windSpeed: data.windSpeed,
+        precipitation: data.precipitation,
+        humidity: data.humidity,
+        solarRadiation: data.solarRadiation,
+        pressure: data.pressure,
+        conditions: data.conditions,
+      };
+      
+      const encrypted = encryptData(sensitiveData);
+      
       await client.query(insertQuery, [
         data.timestamp,
         data.gridRegionId,
         data.location.lon,
         data.location.lat,
         data.source,
-        data.temperature,
-        data.windSpeed,
-        data.precipitation,
-        data.humidity,
-        data.solarRadiation,
-        data.pressure,
-        data.conditions,
+        encrypted.encrypted,
+        encrypted.iv,
+        encrypted.authTag,
+        encrypted.salt,
+        encrypted.keyVersion,
+        encrypted.algorithm,
         data.validatedAt,
         data.validatorVersion,
       ]);
@@ -117,7 +139,7 @@ async function storeWeatherData(weatherDataArray) {
     
     await client.query('COMMIT');
     
-    logger.debug('Stored weather data batch', { count: weatherDataArray.length });
+    logger.debug('Stored encrypted weather data batch', { count: weatherDataArray.length });
   } catch (error) {
     await client.query('ROLLBACK');
     logger.error('Failed to store weather data', { error: error.message });
@@ -137,12 +159,12 @@ async function getWeatherHistory(gridRegionId, hours = 24) {
         grid_region_id,
         ST_X(location) as lon,
         ST_Y(location) as lat,
-        temperature,
-        wind_speed,
-        precipitation,
-        humidity,
-        solar_radiation,
-        pressure
+        encrypted_data,
+        encryption_iv,
+        encryption_auth_tag,
+        encryption_salt,
+        encryption_key_version,
+        encryption_algorithm
       FROM weather_data
       WHERE grid_region_id = $1
         AND timestamp >= NOW() - INTERVAL '${hours} hours'
@@ -151,17 +173,29 @@ async function getWeatherHistory(gridRegionId, hours = 24) {
     
     const result = await client.query(query, [gridRegionId]);
     
-    return result.rows.map(row => ({
-      timestamp: row.timestamp,
-      gridRegionId: row.grid_region_id,
-      location: { lat: row.lat, lon: row.lon },
-      temperature: parseFloat(row.temperature),
-      windSpeed: parseFloat(row.wind_speed),
-      precipitation: parseFloat(row.precipitation),
-      humidity: parseFloat(row.humidity),
-      solarRadiation: parseFloat(row.solar_radiation),
-      pressure: parseFloat(row.pressure),
-    }));
+    return result.rows.map(row => {
+      // Decrypt weather data
+      const decrypted = decryptData({
+        encrypted: row.encrypted_data,
+        iv: row.encryption_iv,
+        authTag: row.encryption_auth_tag,
+        salt: row.encryption_salt,
+        keyVersion: row.encryption_key_version,
+        algorithm: row.encryption_algorithm,
+      });
+      
+      return {
+        timestamp: row.timestamp,
+        gridRegionId: row.grid_region_id,
+        location: { lat: row.lat, lon: row.lon },
+        temperature: parseFloat(decrypted.temperature),
+        windSpeed: parseFloat(decrypted.windSpeed),
+        precipitation: parseFloat(decrypted.precipitation),
+        humidity: parseFloat(decrypted.humidity),
+        solarRadiation: parseFloat(decrypted.solarRadiation),
+        pressure: parseFloat(decrypted.pressure),
+      };
+    });
   } finally {
     client.release();
   }
@@ -178,13 +212,12 @@ async function getLatestWeatherData(gridRegionId) {
         ST_X(location) as lon,
         ST_Y(location) as lat,
         source,
-        temperature,
-        wind_speed,
-        precipitation,
-        humidity,
-        solar_radiation,
-        pressure,
-        conditions
+        encrypted_data,
+        encryption_iv,
+        encryption_auth_tag,
+        encryption_salt,
+        encryption_key_version,
+        encryption_algorithm
       FROM weather_data
       WHERE grid_region_id = $1
       ORDER BY timestamp DESC
@@ -198,18 +231,29 @@ async function getLatestWeatherData(gridRegionId) {
     }
     
     const row = result.rows[0];
+    
+    // Decrypt weather data
+    const decrypted = decryptData({
+      encrypted: row.encrypted_data,
+      iv: row.encryption_iv,
+      authTag: row.encryption_auth_tag,
+      salt: row.encryption_salt,
+      keyVersion: row.encryption_key_version,
+      algorithm: row.encryption_algorithm,
+    });
+    
     return {
       timestamp: row.timestamp,
       gridRegionId: row.grid_region_id,
       location: { lat: row.lat, lon: row.lon },
       source: row.source,
-      temperature: parseFloat(row.temperature),
-      windSpeed: parseFloat(row.wind_speed),
-      precipitation: parseFloat(row.precipitation),
-      humidity: parseFloat(row.humidity),
-      solarRadiation: parseFloat(row.solar_radiation),
-      pressure: parseFloat(row.pressure),
-      conditions: row.conditions,
+      temperature: parseFloat(decrypted.temperature),
+      windSpeed: parseFloat(decrypted.windSpeed),
+      precipitation: parseFloat(decrypted.precipitation),
+      humidity: parseFloat(decrypted.humidity),
+      solarRadiation: parseFloat(decrypted.solarRadiation),
+      pressure: parseFloat(decrypted.pressure),
+      conditions: decrypted.conditions,
     };
   } finally {
     client.release();

@@ -1,77 +1,89 @@
 const { Kafka } = require('kafkajs');
-const crypto = require('crypto');
+const { encryptData, decryptData } = require('../../utils/encryption');
+const logger = require('../../utils/logger');
 
 const kafka = new Kafka({
-  clientId: 'weather-impact-system',
-  brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
-  ssl: process.env.KAFKA_SSL === 'true',
+  clientId: 'weather-ingestion-service',
+  brokers: process.env.KAFKA_BROKERS?.split(',') || ['localhost:9092'],
+  ssl: process.env.KAFKA_SSL === 'true' ? {
+    rejectUnauthorized: true,
+    ca: [process.env.KAFKA_SSL_CA_CERT],
+    cert: process.env.KAFKA_SSL_CLIENT_CERT,
+    key: process.env.KAFKA_SSL_CLIENT_KEY,
+  } : undefined,
+  sasl: process.env.KAFKA_SASL_ENABLED === 'true' ? {
+    mechanism: 'plain',
+    username: process.env.KAFKA_USERNAME,
+    password: process.env.KAFKA_PASSWORD,
+  } : undefined,
+  retry: {
+    initialRetryTime: 100,
+    retries: 8,
+    maxRetryTime: 30000,
+    multiplier: 2,
+  },
 });
 
 const producer = kafka.producer({
-  allowAutoTopicCreation: true,
+  allowAutoTopicCreation: false,
   transactionTimeout: 30000,
+  maxInFlightRequests: 5,
+  idempotent: true,
+  compression: 1, // GZIP compression
 });
 
 const consumer = kafka.consumer({
-  groupId: 'weather-ingestion-group',
+  groupId: 'weather-processing-group',
   sessionTimeout: 30000,
   heartbeatInterval: 3000,
+  maxBytesPerPartition: 1048576, // 1MB
+  retry: {
+    retries: 5,
+  },
 });
 
 const admin = kafka.admin();
 
 // Topic configurations
 const TOPICS = {
-  WEATHER_RAW: 'weather.raw',
-  WEATHER_VALIDATED: 'weather.validated',
-  WEATHER_PREDICTIONS: 'weather.predictions',
-  GRID_TELEMETRY: 'grid.telemetry',
-  GRID_ALERTS: 'grid.alerts'
+  RAW_WEATHER: 'weather.raw',
+  VALIDATED_WEATHER: 'weather.validated',
+  ANOMALIES: 'weather.anomalies',
+  PREDICTIONS: 'weather.predictions',
 };
 
-// Encryption utilities
-const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
-const ENCRYPTION_KEY = Buffer.from(process.env.WEATHER_ENCRYPTION_KEY || crypto.randomBytes(32));
-
+/**
+ * Encrypts weather data using AES-256-GCM with PBKDF2 key derivation
+ * @param {Object} data - Weather data to encrypt
+ * @returns {Object} Encrypted data with metadata
+ */
 function encryptWeatherData(data) {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, ENCRYPTION_KEY, iv);
-  
-  const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(data), 'utf8'),
-    cipher.final()
-  ]);
-  
-  const authTag = cipher.getAuthTag();
-  
-  return {
-    encrypted: encrypted.toString('base64'),
-    iv: iv.toString('base64'),
-    authTag: authTag.toString('base64')
-  };
+  try {
+    return encryptData(data);
+  } catch (error) {
+    logger.error('Failed to encrypt weather data', { error: error.message });
+    throw error;
+  }
 }
 
+/**
+ * Decrypts weather data
+ * @param {Object} encryptedData - Encrypted weather data
+ * @returns {Object} Decrypted weather data
+ */
 function decryptWeatherData(encryptedData) {
-  const decipher = crypto.createDecipheriv(
-    ENCRYPTION_ALGORITHM,
-    ENCRYPTION_KEY,
-    Buffer.from(encryptedData.iv, 'base64')
-  );
-  
-  decipher.setAuthTag(Buffer.from(encryptedData.authTag, 'base64'));
-  
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encryptedData.encrypted, 'base64')),
-    decipher.final()
-  ]);
-  
-  return JSON.parse(decrypted.toString('utf8'));
+  try {
+    return decryptData(encryptedData);
+  } catch (error) {
+    logger.error('Failed to decrypt weather data', { error: error.message });
+    throw error;
+  }
 }
 
 async function initializeTopics() {
+  await admin.connect();
+  
   try {
-    await admin.connect();
-    
     const existingTopics = await admin.listTopics();
     const topicsToCreate = Object.values(TOPICS).filter(
       topic => !existingTopics.includes(topic)
@@ -81,20 +93,20 @@ async function initializeTopics() {
       await admin.createTopics({
         topics: topicsToCreate.map(topic => ({
           topic,
-          numPartitions: 3,
-          replicationFactor: 1,
+          numPartitions: 10,
+          replicationFactor: 3,
           configEntries: [
-            { name: 'retention.ms', value: '604800000' }, // 7 days
-            { name: 'compression.type', value: 'snappy' }
-          ]
-        }))
+            { name: 'compression.type', value: 'gzip' },
+            { name: 'retention.ms', value: '2592000000' }, // 30 days
+            { name: 'segment.ms', value: '86400000' }, // 1 day
+          ],
+        })),
       });
+      
+      logger.info('Kafka topics created', { topics: topicsToCreate });
     }
-    
+  } finally {
     await admin.disconnect();
-  } catch (error) {
-    console.error('Failed to initialize Kafka topics:', error);
-    throw error;
   }
 }
 
@@ -106,5 +118,5 @@ module.exports = {
   TOPICS,
   encryptWeatherData,
   decryptWeatherData,
-  initializeTopics
+  initializeTopics,
 };

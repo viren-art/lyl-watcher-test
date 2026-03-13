@@ -2,103 +2,119 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const weatherRoutes = require('./api/routes/weather-routes');
-const gridRoutes = require('./api/routes/grid-routes');
-const bessRoutes = require('./api/routes/bess-routes');
-const reportRoutes = require('./api/routes/report-routes');
 const WeatherIngestionService = require('./modules/weather-ingestion/ingestion-service');
 const WeatherAPIConnector = require('./modules/weather-ingestion/weather-api-connector');
-const TelemetryIngestionService = require('./modules/grid-telemetry/telemetry-ingestion');
 const { initializeDatabase } = require('./database/timeseries/weather-repository');
 const { initializePredictionTable } = require('./database/timeseries/prediction-repository');
-const { initializeInfrastructureTable } = require('./database/grid-data/infrastructure-repository');
-const { initializeTelemetryTable } = require('./database/grid-data/telemetry-repository');
-const { initializeImpactTable } = require('./database/grid-data/impact-repository');
-const { initializeBESSTable } = require('./database/bess-locations/bess-repository');
-const { initializeAuditTable } = require('./database/audit-logs/audit-repository');
+const { scheduleKeyRotationCheck } = require('./jobs/key-rotation-job');
 const logger = require('./utils/logger');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(helmet());
-app.use(cors());
+// Security middleware
+app.use(helmet({
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+    },
+  },
+}));
+
+// CORS configuration
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3001'],
+  credentials: true,
+}));
+
+// Body parsing
 app.use(express.json());
 
-// Request ID middleware
-app.use((req, res, next) => {
-  req.id = req.headers['x-request-id'] || `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  res.setHeader('X-Request-ID', req.id);
-  next();
-});
+// Force HTTPS in production
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.header('x-forwarded-proto') !== 'https') {
+      return res.redirect(`https://${req.header('host')}${req.url}`);
+    }
+    next();
+  });
+}
 
 // Routes
 app.use('/api/v1/weather', weatherRoutes);
-app.use('/api/v1/grid', gridRoutes);
-app.use('/api/v1/bess', bessRoutes);
-app.use('/api/v1/reports', reportRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    tls: req.secure || req.header('x-forwarded-proto') === 'https',
+  });
 });
 
 // Initialize services
-let weatherIngestion;
-let telemetryIngestion;
+let ingestionService;
+let apiConnector;
 
-async function initializeServices() {
+async function startServer() {
   try {
-    // Initialize databases
+    // Validate encryption configuration
+    if (!process.env.MASTER_ENCRYPTION_KEY) {
+      throw new Error('MASTER_ENCRYPTION_KEY environment variable is required');
+    }
+    
+    // Initialize database with encryption support
     await initializeDatabase();
     await initializePredictionTable();
-    await initializeInfrastructureTable();
-    await initializeTelemetryTable();
-    await initializeImpactTable();
-    await initializeBESSTable();
-    await initializeAuditTable();
     
-    logger.info('All databases initialized');
-
-    // Start weather ingestion
-    const weatherConnector = new WeatherAPIConnector();
-    weatherIngestion = new WeatherIngestionService(weatherConnector);
-    await weatherIngestion.start();
-
-    // Start telemetry ingestion
-    telemetryIngestion = new TelemetryIngestionService();
-    await telemetryIngestion.start();
-
-    logger.info('All services started successfully');
+    // Schedule encryption key rotation checks
+    scheduleKeyRotationCheck();
+    
+    // Start ingestion service
+    ingestionService = new WeatherIngestionService();
+    await ingestionService.start();
+    
+    // Start API connectors
+    apiConnector = new WeatherAPIConnector();
+    await apiConnector.start();
+    
+    // Start HTTP server
+    app.listen(PORT, () => {
+      logger.info(`Weather Impact System API running on port ${PORT}`, {
+        environment: process.env.NODE_ENV,
+        tlsEnabled: process.env.NODE_ENV === 'production',
+        encryptionEnabled: true,
+      });
+    });
   } catch (error) {
-    logger.error('Failed to initialize services', { error: error.message });
+    logger.error('Failed to start server', { error: error.message });
     process.exit(1);
   }
 }
-
-// Start server
-app.listen(PORT, async () => {
-  logger.info(`Server running on port ${PORT}`);
-  await initializeServices();
-});
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
   
-  if (weatherIngestion) await weatherIngestion.stop();
-  if (telemetryIngestion) await telemetryIngestion.stop();
+  if (ingestionService) {
+    await ingestionService.stop();
+  }
+  
+  if (apiConnector) {
+    apiConnector.stop();
+  }
   
   process.exit(0);
 });
 
-process.on('SIGINT', async () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  
-  if (weatherIngestion) await weatherIngestion.stop();
-  if (telemetryIngestion) await telemetryIngestion.stop();
-  
-  process.exit(0);
-});
+startServer();
 
 module.exports = app;
