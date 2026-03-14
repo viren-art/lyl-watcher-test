@@ -490,7 +490,7 @@ class ReportGenerator {
         standard: 'NERC CIP (Critical Infrastructure Protection)',
         requirements: [
           { item: 'CIP-002: BES Cyber System Categorization', status: 'In Progress', notes: 'To be completed during design phase' },
-          { item: 'CIP-003: Security Management Controls', status: 'Pending', notes: 'Security policies to be developed' },
+          { item: 'CIP-003: Security Management Controls', status: 'In Progress', notes: 'Security policies to be developed' },
           { item: 'CIP-005: Electronic Security Perimeter', status: 'Pending', notes: 'Network architecture design required' },
           { item: 'CIP-007: System Security Management', status: 'Pending', notes: 'Security controls to be implemented' }
         ]
